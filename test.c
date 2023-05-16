@@ -18,7 +18,7 @@ static inline long long get_ns()
 }
 int main()
 {
-    char buf[1];
+    char buf[128];
     char write_buf[] = "testing writing";
     int offset = 92;
 
@@ -36,6 +36,7 @@ int main()
         real_time = get_ns() - start;
         k_time = write(fd, write_buf, strlen(write_buf));
         printf("%d %lld %lld %lld\n", i, real_time, k_time, real_time - k_time);
+        // printf("%s\n", buf);
     }
     close(fd);
     return 0;

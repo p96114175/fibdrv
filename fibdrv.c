@@ -22,7 +22,7 @@ MODULE_VERSION("0.1");
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
-static DEFINE_MUTEX(fib_mutex);
+// static DEFINE_MUTEX(fib_mutex);
 
 static long long fib_sequence(long long k)
 {
@@ -38,19 +38,53 @@ static long long fib_sequence(long long k)
 
     return f[k];
 }
+static long long fib_doubling(long long n)
+{
+    if (n <= 2)
+        return n ? 1 : 0;
+    long long k = n >> 1;
+    long long a = fib_doubling(k);
+    long long b = fib_doubling(k + 1);
+    if (n % 2)
+        return a * a + b * b;
+    return a * ((b << 1) - a);
+}
+static long long fib_interative(long long n)
+{
+    uint8_t bits = 0;
+    for (uint64_t i = n; i; ++bits, i >>= 1)
+        ;
+
+    long long a = 0;  // F(0) = 0
+    long long b = 1;  // F(1) = 1
+    for (uint64_t mask = 1 << (bits - 1); mask; mask >>= 1) {
+        long long c = a * (2 * b - a);  // F(2k) = F(k) * [ 2 * F(k+1) – F(k) ]
+        long long d = a * a + b * b;    // F(2k+1) = F(k)^2 + F(k+1)^2
+
+        if (mask & n) {  // n_j is odd: k = (n_j-1)/2 => n_j = 2k + 1
+            a = d;       //   F(n_j) = F(2k + 1)
+            b = c + d;   //   F(n_j + 1) = F(2k + 2) = F(2k) + F(2k + 1)
+        } else {         // n_j is even: k = n_j/2 => n_j = 2k
+            a = c;       //   F(n_j) = F(2k)
+            b = d;       //   F(n_j + 1) = F(2k + 1)
+        }
+    }
+
+    return a;
+}
 
 static int fib_open(struct inode *inode, struct file *file)
 {
-    if (!mutex_trylock(&fib_mutex)) {
-        printk(KERN_ALERT "fibdrv is in use");
-        return -EBUSY;
-    }
+    // if (!mutex_trylock(&fib_mutex)) {
+    //     printk(KERN_ALERT "fibdrv is in use");
+    //     return -EBUSY;
+    // }
     return 0;
 }
 
 static int fib_release(struct inode *inode, struct file *file)
 {
-    mutex_unlock(&fib_mutex);
+    // mutex_unlock(&fib_mutex);
     return 0;
 }
 
@@ -108,7 +142,7 @@ static int __init init_fib_dev(void)
 {
     int rc = 0;
 
-    mutex_init(&fib_mutex);
+    // mutex_init(&fib_mutex);
 
     // Let's register the device
     // This will dynamically allocate the major number
@@ -161,7 +195,7 @@ failed_cdev:
 
 static void __exit exit_fib_dev(void)
 {
-    mutex_destroy(&fib_mutex);
+    // mutex_destroy(&fib_mutex);
     device_destroy(fib_class, fib_dev);
     class_destroy(fib_class);
     cdev_del(fib_cdev);
