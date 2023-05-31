@@ -8,6 +8,9 @@
 #include <unistd.h>
 
 // #include "BigNumber.h"
+
+#define FIB_DEV "/dev/fibonacci"
+
 char *bn_to_string(void *str, size_t size)
 {
     // log10(x) = log2(x) / log2(10) ~= log2(x) / 3.322
