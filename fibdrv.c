@@ -150,12 +150,11 @@ static ssize_t fib_read(struct file *file,
                         loff_t *offset)
 {
     bn *fib = bn_alloc(1);
-    bn_fib(fib, *offset);
-    char *s = bn_to_string(*fib);
-    size_t re = copy_to_user(buf, s, strlen(s) + 1);
+    bn_fib_fdoubling(fib, *offset);
+    int len = fib->size;
+    copy_to_user(buf, fib->number, sizeof(unsigned int) * len);
     bn_free(fib);
-    kfree(s);
-    return (size_t) re;
+    return len;
 }
 
 /* write operation is skipped */

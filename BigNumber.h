@@ -158,37 +158,37 @@ static int bn_msb(const bn *src)
  * output bn to decimal string
  * Note: the returned string should be freed with kfree()
  */
-char *bn_to_string(bn src)
-{
-    // log10(x) = log2(x) / log2(10) ~= log2(x) / 3.322
-    size_t len = (8 * sizeof(int) * src.size) / 3 + 2 + src.sign;
-    char *s = kmalloc(len, GFP_KERNEL);
-    char *p = s;
+// char *bn_to_string(bn src)
+// {
+//     // log10(x) = log2(x) / log2(10) ~= log2(x) / 3.322
+//     size_t len = (8 * sizeof(int) * src.size) / 3 + 2 + src.sign;
+//     char *s = kmalloc(len, GFP_KERNEL);
+//     char *p = s;
 
-    memset(s, '0', len - 1);
-    s[len - 1] = '\0';
+//     memset(s, '0', len - 1);
+//     s[len - 1] = '\0';
 
-    for (int i = src.size - 1; i >= 0; i--) {
-        for (unsigned int d = 1U << 31; d; d >>= 1) {
-            /* binary -> decimal string */
-            int carry = !!(d & src.number[i]);
-            for (int j = len - 2; j >= 0; j--) {
-                s[j] += s[j] - '0' + carry;  // double it
-                carry = (s[j] > '9');
-                if (carry)
-                    s[j] -= 10;
-            }
-        }
-    }
-    // skip leading zero
-    while (p[0] == '0' && p[1] != '\0') {
-        p++;
-    }
-    if (src.sign)
-        *(--p) = '-';
-    memmove(s, p, strlen(p) + 1);
-    return s;
-}
+//     for (int i = src.size - 1; i >= 0; i--) {
+//         for (unsigned int d = 1U << 31; d; d >>= 1) {
+//             /* binary -> decimal string */
+//             int carry = !!(d & src.number[i]);
+//             for (int j = len - 2; j >= 0; j--) {
+//                 s[j] += s[j] - '0' + carry;  // double it
+//                 carry = (s[j] > '9');
+//                 if (carry)
+//                     s[j] -= 10;
+//             }
+//         }
+//     }
+//     // skip leading zero
+//     while (p[0] == '0' && p[1] != '\0') {
+//         p++;
+//     }
+//     if (src.sign)
+//         *(--p) = '-';
+//     memmove(s, p, strlen(p) + 1);
+//     return s;
+// }
 
 /* |c| = |a| + |b| */
 static void bn_do_add(const bn *a, const bn *b, bn *c)
