@@ -29,6 +29,7 @@ static struct task_struct *worker_task, *default_task;
 static int get_current_cpu, set_current_cpu;
 #define WORKER_THREAD_DELAY 4
 #define DEFAULT_THREAD_DELAY 6
+#define DEFAULT_HASHTABLE_LENGTH 7
 
 #define DEV_FIBONACCI_NAME "fibonacci"
 
@@ -50,11 +51,13 @@ struct bn_hashtable {
     struct _bn *bn_object;
     struct hlist_node node;
 };
+/* hashtable_release prototype declaration*/
+static void hashtable_release(void);
 /*
  * define a hash table with 2^7(=128) buckets
  * => struct hlist_head htable[128] = { [0 ... 127] = HLIST_HEAD_INIT };
  */
-DEFINE_HASHTABLE(htable, 7);
+DEFINE_HASHTABLE(htable, DEFAULT_HASHTABLE_LENGTH);
 
 
 static long long fib_sequence(long long k)
@@ -163,17 +166,6 @@ void bn_fib_doubling(bn *dest, unsigned int n)
         return;
     }
 
-    // /* search hashtable*/
-    // unsigned int key = n;
-    // struct bn_hashtable *hash_t_;
-    // hash_for_each_possible(htable, hash_t_, node, key) {
-    //     if(hash_t_->id == key) {
-    //         bn_cpy(dest, hash_t_->bn_object);
-    //         return;
-    //     }
-    // }
-    // kfree(hash_t_);
-
     bn *f1 = dest;        /* F(k) */
     bn *f2 = bn_alloc(1); /* F(k+1) */
     f1->number[0] = 0;
@@ -242,79 +234,25 @@ static int fib_release(struct inode *inode, struct file *file)
     // mutex_unlock(&fib_mutex);
     return 0;
 }
-// static int worker_task_handler_fn(bn *fib , loff_t *offset)
-// {
-// 	/*@brief
-// 	 * here is your world, you can declare your variables,structs
-// 	*/
 
-// 	/* @note this macro will allow to stop thread from userspace
-// 	 * or kernelspace
-// 	 */
-// 	allow_signal(SIGKILL);
+/*release hashtable*/
+static void hashtable_release(void)
+{
+    struct bn_hashtable *pos = NULL;
+    struct hlist_node *n = NULL;
+    int bucket;
 
-// 	/*@attention while(true),while(1==1),for(;;) loops will can't
-// 	 *receive signal for stopping thread
-// 	 */
-// 	while(!kthread_should_stop()){
-//         pr_info("IWorker thread executing on system CPU:%d \n", get_cpu());
-// 		ssleep(WORKER_THREAD_DELAY);
-
-// 	/*@attention while(true),for(;;) loops will can't receive signals,
-//      *kernel threads doesnt allow sync signal handling like user space apps.
-// 	 *you must check signals in forever loops everytime
-// 	 *if signal_pending function capture SIGKILL signal, then thread will exit
-// 	 */
-
-//         bn_fib_doubling(fib, *offset);
-// 		if (signal_pending(worker_task))
-// 			            break;
-// 	}
-// 	/*@brief
-// 	 * do_exit is same as exit(0) function, but must be used with threads
-// 	 */
-
-// 	/*@brief
-// 	 * Kernel Thread has higher priority than user thread because Kernel threads
-// 	 * are used to provide privileged services to applications.
-// 	 */
-
-// 	do_exit(0);
-// 	pr_err("Worker task exiting\n");
-// 	return 0;
-// }
+    for (bucket = 0; bucket < (1U << DEFAULT_HASHTABLE_LENGTH); ++bucket) {
+        hlist_for_each_entry_safe(pos, n, &htable[bucket], node)
+        {
+            kfree(pos->id);
+            bn_free(pos->bn_object);
+            hlist_del(&pos->node);
+            kfree(pos);
+        }
+    }
+}
 /* calculate the fibonacci number at given offset */
-// static ssize_t fib_read(struct file *file,
-//                         char *buf,
-//                         size_t size,
-//                         loff_t *offset)
-// {
-//     // int len = 0;
-//     // bn *fib = bn_alloc(1);
-//     // bn_fib_doubling(fib, *offset);
-//     // pr_info("Initializing kernel mode thread example module\n");
-// 	// pr_info("Creating Threads\n");
-//     // get_current_cpu = get_cpu();
-//     // worker_task = kthread_create(worker_task_handler_fn(fib, offset),
-// 	// 		(void*)"arguments as char pointer","fibonacci kthread");
-// 	// kthread_bind(worker_task,get_current_cpu);
-//     // if(worker_task)
-// 	// 	pr_info("Worker task created successfully\n");
-// 	// else
-// 	// 	pr_info("Worker task error while creating\n");
-//     // wake_up_process(worker_task);
-
-//     // if(worker_task)
-// 	// 	kthread_stop(worker_task);
-//     kthread_run(worker_task_handler_fn(fib, offset),
-// 			(void*)"arguments as char pointer","fibonacci kthread");
-//     kthread_should_stop();
-//     len = fib->size;
-//     copy_to_user(buf, fib->number, sizeof(unsigned int)*len);
-//     bn_free(fib);
-
-//     return len;
-// }
 static ssize_t fib_read(struct file *file,
                         char *buf,
                         size_t size,
@@ -332,13 +270,13 @@ static ssize_t fib_read(struct file *file,
             len = hash_t_->bn_object->size;
             copy_to_user(buf, hash_t_->bn_object->number,
                          sizeof(unsigned int) * len);
+            printk(KERN_INFO "get target %d \n", key);
             bn_free(fib);
             return len;
         }
     }
     kfree(hash_t_);
     bn_free(fib);
-
     return len;
 }
 /* write operation is skipped */
@@ -439,6 +377,7 @@ failed_cdev:
 
 static void __exit exit_fib_dev(void)
 {
+    hashtable_release();
     // mutex_destroy(&fib_mutex);
     device_destroy(fib_class, fib_dev);
     class_destroy(fib_class);
