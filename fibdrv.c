@@ -51,8 +51,6 @@ struct bn_hashtable {
     struct _bn *bn_object;
     struct hlist_node node;
 };
-/* hashtable_release prototype declaration*/
-static void hashtable_release(void);
 /*
  * define a hash table with 2^7(=128) buckets
  * => struct hlist_head htable[128] = { [0 ... 127] = HLIST_HEAD_INIT };
@@ -245,7 +243,6 @@ static void hashtable_release(void)
     for (bucket = 0; bucket < (1U << DEFAULT_HASHTABLE_LENGTH); ++bucket) {
         hlist_for_each_entry_safe(pos, n, &htable[bucket], node)
         {
-            kfree(pos->id);
             bn_free(pos->bn_object);
             hlist_del(&pos->node);
             kfree(pos);
@@ -377,7 +374,7 @@ failed_cdev:
 
 static void __exit exit_fib_dev(void)
 {
-    // hashtable_release();
+    hashtable_release();
     // mutex_destroy(&fib_mutex);
     device_destroy(fib_class, fib_dev);
     class_destroy(fib_class);
