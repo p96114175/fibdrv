@@ -46,9 +46,10 @@ char *bn_to_string(void *str, size_t size)
 
 int main()
 {
-    char buf[100000];
+    // char buf[1000000];
+    char buf[1000000];
     // char write_buf[] = "testing writing";
-    int offset = 100000;
+    int offset = 200;
 
     int fd = open(FIB_DEV, O_RDWR);
 
@@ -64,7 +65,10 @@ int main()
                " at ofset %d, returned the sequence "
                "%s.\n",
                i, p);
+        free(p);
+        // printf("%d", len);
     }
+    // free(buf);
     close(fd);
     return 0;
 }

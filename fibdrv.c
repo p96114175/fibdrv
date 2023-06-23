@@ -7,11 +7,28 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 
+#include <linux/hash.h>
+#include <linux/hashtable.h>
 #include "BigNumber.h"
+
+#include <linux/delay.h>    //used for ssleep()
+#include <linux/kernel.h>   //used for do_exit()
+#include <linux/kthread.h>  //used for kthread_create
+#include <linux/threads.h>  //used for allow_signal
+
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
 MODULE_DESCRIPTION("Fibonacci engine driver");
 MODULE_VERSION("0.1");
+
+/*@brief
+ * kthread parameters
+ */
+
+static struct task_struct *worker_task, *default_task;
+static int get_current_cpu, set_current_cpu;
+#define WORKER_THREAD_DELAY 4
+#define DEFAULT_THREAD_DELAY 6
 
 #define DEV_FIBONACCI_NAME "fibonacci"
 
@@ -24,6 +41,21 @@ static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 // static DEFINE_MUTEX(fib_mutex);
+
+/**
+ The below section is for hashtable
+ **/
+struct bn_hashtable {
+    unsigned int id;
+    struct _bn *bn_object;
+    struct hlist_node node;
+};
+/*
+ * define a hash table with 2^7(=128) buckets
+ * => struct hlist_head htable[128] = { [0 ... 127] = HLIST_HEAD_INIT };
+ */
+DEFINE_HASHTABLE(htable, 7);
+
 
 static long long fib_sequence(long long k)
 {
@@ -73,6 +105,22 @@ static long long fib_interative(long long n)
 
     return a;
 }
+void bn_fib_recursive(bn *dest, unsigned int n)
+{
+    bn_resize(dest, 1);
+    if (n < 2) {  // Fib(0) = 0, Fib(1) = 1
+        dest->number[0] = n;
+        return;
+    }
+
+    bn *a = bn_alloc(1);
+    bn *b = bn_alloc(1);
+    // bn_fib_recursive(a, n - 1);
+    // bn_fib_recursive(b, n - 2);
+    // bn_add(a, b, dest);
+    bn_free(a);
+    bn_free(b);
+}
 /* calc n-th Fibonacci number and save into dest */
 void bn_fib(bn *dest, unsigned int n)
 {
@@ -86,15 +134,28 @@ void bn_fib(bn *dest, unsigned int n)
     bn *b = bn_alloc(1);
     dest->number[0] = 1;
 
+    // unsigned int key = n;
+    // struct bn_hashtable *hash_t_;
+    // hash_for_each_possible(htable, hash_t_, node, key) {
+    //     if(hash_t_->id == key) {
+    //         dest->number = hash_t_->bn_object->number;
+    //         dest->size = hash_t_->bn_object->size;
+    //         break;
+    //     }
+    // }
     for (unsigned int i = 1; i < n; i++) {
-        bn_swap(b, dest);
-        bn_add(a, b, dest);
-        bn_swap(a, b);
+        bn_swap(b, dest);    // b = dest
+        bn_add(a, b, dest);  // dest = a + dest
+        bn_swap(a, b);       // a = dest
+        // struct bn_hashtable *hash_t = kmalloc(sizeof(struct bn_hashtable),
+        // GFP_KERNEL); hash_t->id = i+1; bn *tmp = bn_alloc(1); bn_cpy(tmp,
+        // dest); hash_t->bn_object = tmp; hash_add(htable, &hash_t->node,
+        // hash_t->id);
     }
     bn_free(a);
     bn_free(b);
 }
-void bn_fib_fdoubling(bn *dest, unsigned int n)
+void bn_fib_doubling(bn *dest, unsigned int n)
 {
     bn_resize(dest, 1);
     if (n < 2) {  // Fib(0) = 0, Fib(1) = 1
@@ -102,29 +163,68 @@ void bn_fib_fdoubling(bn *dest, unsigned int n)
         return;
     }
 
-    bn *f1 = bn_alloc(1);  // f1 = F(k-1)
-    bn *f2 = dest;         // f2 = F(k) = dest
+    // /* search hashtable*/
+    // unsigned int key = n;
+    // struct bn_hashtable *hash_t_;
+    // hash_for_each_possible(htable, hash_t_, node, key) {
+    //     if(hash_t_->id == key) {
+    //         bn_cpy(dest, hash_t_->bn_object);
+    //         return;
+    //     }
+    // }
+    // kfree(hash_t_);
+
+    bn *f1 = dest;        /* F(k) */
+    bn *f2 = bn_alloc(1); /* F(k+1) */
     f1->number[0] = 0;
     f2->number[0] = 1;
     bn *k1 = bn_alloc(1);
     bn *k2 = bn_alloc(1);
-
-    for (unsigned int i = 1U << (30 - __builtin_clz(n)); i; i >>= 1) {
-        /* F(2k-1) = F(k)^2 + F(k-1)^2 */
-        /* F(2k) = F(k) * [ 2 * F(k-1) + F(k) ] */
-        bn_lshift(f1, 1, k1);  // k1 = 2 * F(k-1)
-        bn_add(k1, f2, k1);    // k1 = 2 * F(k-1) + F(k)
-        bn_mult(k1, f2, k2);   // k2 = k1 * f2 = F(2k)
-        bn_mult(f2, f2, k1);   // k1 = F(k)^2
-        bn_swap(f2, k2);       // f2 <-> k2, f2 = F(2k) now
-        bn_mult(f1, f1, k2);   // k2 = F(k-1)^2
-        bn_add(k2, k1, f1);    // f1 = k1 + k2 = F(2k-1) now
-        if (n & i) {
+    // Follow the rule as below
+    // f(0)  -----> f(1)  -----> f(2)  -----> f(5)  -----> f(10)  ......
+    //        2n+1          2n          2n+1          2n
+    unsigned int count = 0;
+    struct bn_hashtable *hash_t =
+        kmalloc(sizeof(struct bn_hashtable), GFP_KERNEL);
+    hash_t->id = count;
+    bn *tmp = bn_alloc(1);
+    bn_cpy(tmp, dest);
+    hash_t->bn_object = tmp;
+    hash_add(htable, &hash_t->node, hash_t->id);
+    // Take for example f(100) = 1100100 , initial i is 1100100, following i as
+    // 1000000, 0100000, 0000000, 0000000, 0000100, 0000000, 0000000
+    for (unsigned int i = 1U << (31 - __builtin_clz(n)); i; i >>= 1) {
+        count = (n & i) ? (count << 1) + 1 : count << 1;
+        /* F(2k) = F(k) * [ 2 * F(k+1) – F(k) ] */
+        /* F(2k+1) = F(k)^2 + F(k+1)^2 */
+        bn_lshift(f2, 1, k1);  // k1 = 2 * F(k+1)
+        bn_sub(k1, f1, k1);    // k1 = 2 * F(k+1) – F(k)
+        bn_mult(k1, f1, k2);   // k2 = k1 * f1 = F(2k)
+        bn_mult(f1, f1, k1);   // k1 = F(k)^2
+        bn_swap(f1, k2);       // f1 <-> k2, f1 = F(2k) now
+        bn_mult(f2, f2, k2);   // k2 = F(k+1)^2
+        bn_add(k1, k2, f2);    // f2 = f1^2 + f2^2 = F(2k+1) now
+        // Below description is for "if (n & i)".
+        // if i is 1000000, then do 1100100 & 1000000. Finally, I would get
+        // true. if i is 0100000, then do 1100100 & 0100000. Finally, I would
+        // get true. if i is 0000000, then do 1100100 & 0000000. Finally, I
+        // would get false. if i is 0000000, then do 1100100 & 0000000. Finally,
+        // I would get false. if i is 0000100, then do 1100100 & 0000100.
+        // Finally, I would get true. if i is 1000000, then do 1100100 &
+        // 1000000. Finally, I would get false.
+        if (n & i) {             // odd
             bn_swap(f1, f2);     // f1 = F(2k+1)
             bn_add(f1, f2, f2);  // f2 = F(2k+2)
         }
+        struct bn_hashtable *hash_t_loop =
+            kmalloc(sizeof(struct bn_hashtable), GFP_KERNEL);
+        hash_t_loop->id = count;
+        bn *tmp_loop = bn_alloc(1);
+        bn_cpy(tmp_loop, dest);
+        hash_t_loop->bn_object = tmp_loop;
+        hash_add(htable, &hash_t_loop->node, hash_t_loop->id);
     }
-    bn_free(f1);
+    bn_free(f2);
     bn_free(k1);
     bn_free(k2);
 }
@@ -142,21 +242,105 @@ static int fib_release(struct inode *inode, struct file *file)
     // mutex_unlock(&fib_mutex);
     return 0;
 }
+// static int worker_task_handler_fn(bn *fib , loff_t *offset)
+// {
+// 	/*@brief
+// 	 * here is your world, you can declare your variables,structs
+// 	*/
 
+// 	/* @note this macro will allow to stop thread from userspace
+// 	 * or kernelspace
+// 	 */
+// 	allow_signal(SIGKILL);
+
+// 	/*@attention while(true),while(1==1),for(;;) loops will can't
+// 	 *receive signal for stopping thread
+// 	 */
+// 	while(!kthread_should_stop()){
+//         pr_info("IWorker thread executing on system CPU:%d \n", get_cpu());
+// 		ssleep(WORKER_THREAD_DELAY);
+
+// 	/*@attention while(true),for(;;) loops will can't receive signals,
+//      *kernel threads doesnt allow sync signal handling like user space apps.
+// 	 *you must check signals in forever loops everytime
+// 	 *if signal_pending function capture SIGKILL signal, then thread will exit
+// 	 */
+
+//         bn_fib_doubling(fib, *offset);
+// 		if (signal_pending(worker_task))
+// 			            break;
+// 	}
+// 	/*@brief
+// 	 * do_exit is same as exit(0) function, but must be used with threads
+// 	 */
+
+// 	/*@brief
+// 	 * Kernel Thread has higher priority than user thread because Kernel threads
+// 	 * are used to provide privileged services to applications.
+// 	 */
+
+// 	do_exit(0);
+// 	pr_err("Worker task exiting\n");
+// 	return 0;
+// }
 /* calculate the fibonacci number at given offset */
+// static ssize_t fib_read(struct file *file,
+//                         char *buf,
+//                         size_t size,
+//                         loff_t *offset)
+// {
+//     // int len = 0;
+//     // bn *fib = bn_alloc(1);
+//     // bn_fib_doubling(fib, *offset);
+//     // pr_info("Initializing kernel mode thread example module\n");
+// 	// pr_info("Creating Threads\n");
+//     // get_current_cpu = get_cpu();
+//     // worker_task = kthread_create(worker_task_handler_fn(fib, offset),
+// 	// 		(void*)"arguments as char pointer","fibonacci kthread");
+// 	// kthread_bind(worker_task,get_current_cpu);
+//     // if(worker_task)
+// 	// 	pr_info("Worker task created successfully\n");
+// 	// else
+// 	// 	pr_info("Worker task error while creating\n");
+//     // wake_up_process(worker_task);
+
+//     // if(worker_task)
+// 	// 	kthread_stop(worker_task);
+//     kthread_run(worker_task_handler_fn(fib, offset),
+// 			(void*)"arguments as char pointer","fibonacci kthread");
+//     kthread_should_stop();
+//     len = fib->size;
+//     copy_to_user(buf, fib->number, sizeof(unsigned int)*len);
+//     bn_free(fib);
+
+//     return len;
+// }
 static ssize_t fib_read(struct file *file,
                         char *buf,
                         size_t size,
                         loff_t *offset)
 {
+    int len = 0;
     bn *fib = bn_alloc(1);
-    bn_fib_fdoubling(fib, *offset);
-    int len = fib->size;
-    copy_to_user(buf, fib->number, sizeof(unsigned int) * len);
+    bn_fib_doubling(fib, *offset);
+    unsigned int key = 100;  // 以f(100)為例，這裡會設定 key 為 0, 1, 3, 6, 12,
+                             // 25,50,100 ,驗證是否儲存正確
+    struct bn_hashtable *hash_t_;
+    hash_for_each_possible(htable, hash_t_, node, key)
+    {
+        if (hash_t_->id == key) {
+            len = hash_t_->bn_object->size;
+            copy_to_user(buf, hash_t_->bn_object->number,
+                         sizeof(unsigned int) * len);
+            bn_free(fib);
+            return len;
+        }
+    }
+    kfree(hash_t_);
     bn_free(fib);
+
     return len;
 }
-
 /* write operation is skipped */
 static ssize_t fib_write(struct file *file,
                          const char *buf,
