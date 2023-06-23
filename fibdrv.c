@@ -377,7 +377,7 @@ failed_cdev:
 
 static void __exit exit_fib_dev(void)
 {
-    hashtable_release();
+    // hashtable_release();
     // mutex_destroy(&fib_mutex);
     device_destroy(fib_class, fib_dev);
     class_destroy(fib_class);
